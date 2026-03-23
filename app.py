@@ -354,6 +354,6 @@ else:
 - The next launch time is **{next_launch_time}**.
 - The launch layer is operational.
 """)
-{
+
   
  
