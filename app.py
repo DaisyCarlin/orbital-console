@@ -354,3 +354,234 @@ else:
 - The next launch time is **{next_launch_time}**.
 - The launch layer is operational.
 """)
+# =========================
+# AI MISSION INFERENCE
+# Add near the bottom of app.py
+# =========================
+
+import os
+import json
+import pandas as pd
+import streamlit as st
+
+# Optional AI support
+try:
+    from openai import OpenAI
+    OPENAI_AVAILABLE = True
+except Exception:
+    OPENAI_AVAILABLE = False
+
+
+def is_secret_mission(row: pd.Series) -> bool:
+    """
+    Heuristic: identify launches that are likely classified / secret.
+    Edit the column names here to match your dataframe.
+    """
+    text_parts = [
+        str(row.get("mission", "")),
+        str(row.get("name", "")),
+        str(row.get("payload", "")),
+        str(row.get("description", "")),
+        str(row.get("status", "")),
+        str(row.get("remarks", "")),
+        str(row.get("customer", "")),
+    ]
+    text = " ".join(text_parts).upper()
+
+    keywords = [
+        "SECRET",
+        "CLASSIFIED",
+        "UNKNOWN",
+        "NROL",
+        "USA-",
+        "USSF",
+        "YAOGAN",
+        "MILITARY",
+        "RECONNAISSANCE",
+    ]
+    return any(k in text for k in keywords)
+
+
+def infer_from_rules(row: pd.Series) -> dict:
+    """
+    Fallback non-AI rules so the feature still works without an API key.
+    """
+    mission = str(row.get("mission", "")).upper()
+    rocket = str(row.get("rocket", row.get("vehicle", ""))).upper()
+    site = str(row.get("site", row.get("launch_site", ""))).upper()
+    orbit = str(row.get("orbit", row.get("target_orbit", ""))).upper()
+    customer = str(row.get("customer", "")).upper()
+    payload = str(row.get("payload", "")).upper()
+
+    combined = " ".join([mission, rocket, site, orbit, customer, payload])
+
+    likely_type = "Unknown classified payload"
+    why_secret = "Limited public disclosure and government/national-security indicators."
+    confidence = 0.45
+    evidence = []
+
+    if "NROL" in combined or "NRO" in combined:
+        likely_type = "Reconnaissance / intelligence satellite"
+        why_secret = "NRO missions are usually classified because they support U.S. intelligence collection."
+        confidence = 0.82
+        evidence += ["NROL/NRO designation"]
+
+    if "USSF" in combined:
+        likely_type = "Military space support / surveillance payload"
+        why_secret = "USSF missions often involve national-security communications, missile warning, or orbital monitoring."
+        confidence = max(confidence, 0.74)
+        evidence += ["USSF designation"]
+
+    if "YAOGAN" in combined:
+        likely_type = "Military remote sensing / ISR satellite"
+        why_secret = "Yaogan missions are widely treated as Chinese military reconnaissance-related launches."
+        confidence = max(confidence, 0.80)
+        evidence += ["Yaogan designation"]
+
+    if "GEO" in orbit:
+        likely_type = "Signals intelligence, military communications, or GEO space surveillance"
+        why_secret = "Classified GEO missions often support strategic communications or monitoring of other satellites."
+        confidence = max(confidence, 0.68)
+        evidence += ["GEO-like orbit"]
+
+    if "SSO" in orbit or "SUN" in orbit or "POLAR" in orbit:
+        likely_type = "Imaging or SAR reconnaissance satellite"
+        why_secret = "Sun-synchronous and polar orbits are common for Earth observation and military imaging."
+        confidence = max(confidence, 0.71)
+        evidence += ["SSO/polar-style orbit"]
+
+    if "VANDENBERG" in site:
+        evidence += ["Vandenberg launch site often used for polar/SSO missions"]
+
+    if "FALCON 9" in rocket and "NROL" in combined:
+        evidence += ["Pattern matches recent Falcon 9 NRO launches"]
+
+    if not evidence:
+        evidence = ["Classified wording in mission metadata"]
+
+    return {
+        "likely_type": likely_type,
+        "why_secret": why_secret,
+        "confidence": round(confidence, 2),
+        "evidence": evidence[:4],
+    }
+
+
+def ai_infer_secret_mission(row: pd.Series, model: str = "gpt-5.2") -> dict:
+    """
+    Uses OpenAI to turn mission metadata into an OSINT-style probability estimate.
+    Requires OPENAI_API_KEY in environment or Streamlit secrets.
+    """
+    api_key = (
+        os.getenv("OPENAI_API_KEY")
+        or st.secrets.get("OPENAI_API_KEY", None)
+        if hasattr(st, "secrets") else None
+    )
+
+    if not OPENAI_AVAILABLE or not api_key:
+        return infer_from_rules(row)
+
+    client = OpenAI(api_key=api_key)
+
+    # Keep only fields likely to exist in launch tables
+    fields = {
+        "mission": row.get("mission", ""),
+        "rocket": row.get("rocket", row.get("vehicle", "")),
+        "launch_date": row.get("launch_date", row.get("date", "")),
+        "site": row.get("site", row.get("launch_site", "")),
+        "customer": row.get("customer", ""),
+        "payload": row.get("payload", ""),
+        "orbit": row.get("orbit", row.get("target_orbit", "")),
+        "description": row.get("description", ""),
+        "status": row.get("status", ""),
+        "remarks": row.get("remarks", ""),
+    }
+
+    prompt = f"""
+You are an aerospace OSINT analyst.
+
+Given this launch metadata, infer the MOST LIKELY reason the mission is secret/classified.
+Do NOT claim certainty. Use cautious probabilistic language.
+
+Return valid JSON only with this schema:
+{{
+  "likely_type": "string",
+  "why_secret": "string",
+  "confidence": 0.0,
+  "evidence": ["string", "string", "string"]
+}}
+
+Launch metadata:
+{json.dumps(fields, ensure_ascii=False)}
+"""
+
+    try:
+        response = client.responses.create(
+            model=model,
+            input=prompt,
+        )
+
+        text = response.output_text.strip()
+        parsed = json.loads(text)
+
+        return {
+            "likely_type": parsed.get("likely_type", "Unknown classified payload"),
+            "why_secret": parsed.get("why_secret", "Limited public disclosure."),
+            "confidence": float(parsed.get("confidence", 0.5)),
+            "evidence": parsed.get("evidence", [])[:4],
+        }
+    except Exception:
+        return infer_from_rules(row)
+
+
+# ---------- UI SECTION ----------
+st.markdown("---")
+st.subheader("AI Mission Inference")
+st.caption("Best-effort OSINT estimate for launches marked secret/classified. This is an inference tool, not confirmation.")
+
+# Replace df_launches with your actual dataframe variable
+launch_df = df_launches.copy()
+
+secret_df = launch_df[launch_df.apply(is_secret_mission, axis=1)].copy()
+
+if secret_df.empty:
+    st.info("No secret/classified missions found in the current table.")
+else:
+    use_ai = st.toggle("Use AI explanations", value=True)
+    max_rows = st.slider("Secret missions to analyze", min_value=1, max_value=min(10, len(secret_df)), value=min(5, len(secret_df)))
+
+    secret_df = secret_df.head(max_rows)
+
+    results = []
+    with st.spinner("Analysing classified mission patterns..."):
+        for _, row in secret_df.iterrows():
+            result = ai_infer_secret_mission(row) if use_ai else infer_from_rules(row)
+
+            results.append({
+                "Mission": row.get("mission", row.get("name", "Unknown")),
+                "Rocket": row.get("rocket", row.get("vehicle", "Unknown")),
+                "Launch Date": row.get("launch_date", row.get("date", "")),
+                "Likely Type": result["likely_type"],
+                "Why Secret": result["why_secret"],
+                "Confidence": result["confidence"],
+                "Evidence": " | ".join(result["evidence"]),
+            })
+
+    results_df = pd.DataFrame(results)
+
+    st.dataframe(
+        results_df,
+        use_container_width=True,
+        hide_index=True,
+    )
+
+    with st.expander("Show analyst cards"):
+        for _, r in results_df.iterrows():
+            st.markdown(f"### {r['Mission']}")
+            st.write(f"**Rocket:** {r['Rocket']}")
+            st.write(f"**Launch Date:** {r['Launch Date']}")
+            st.write(f"**Likely Type:** {r['Likely Type']}")
+            st.write(f"**Why Secret:** {r['Why Secret']}")
+            st.write(f"**Confidence:** {int(float(r['Confidence']) * 100)}%")
+            st.write(f"**Evidence:** {r['Evidence']}")
+            st.markdown("---")
