@@ -11,9 +11,6 @@ st.set_page_config(
 st.title("Orbital SIGINT Console")
 st.caption("Aerospace activity dashboard for upcoming launches and satellite monitoring.")
 
-# -----------------------------
-# Data loading
-# -----------------------------
 @st.cache_data(ttl=300)
 def get_upcoming_launches():
     url = "https://ll.thespacedevs.com/2.2.0/launch/upcoming/?limit=15&mode=detailed"
@@ -97,9 +94,7 @@ except Exception as e:
     recent_launches_df = pd.DataFrame()
     recent_launch_error = str(e)
 
-# -----------------------------
-# Failed launches filter
-# -----------------------------
+
 failed_launches_df = pd.DataFrame()
 
 if not recent_launches_df.empty and "status" in recent_launches_df.columns:
@@ -117,9 +112,7 @@ if not recent_launches_df.empty and "status" in recent_launches_df.columns:
         failed_launches_df["net"] >= now_utc - pd.Timedelta(days=30)
     ].copy()
 
-# -----------------------------
-# Top status cards
-# -----------------------------
+
 st.subheader("System Status")
 
 c1, c2, c3, c4 = st.columns(4)
@@ -141,9 +134,7 @@ with c4:
 
 st.divider()
 
-# -----------------------------
-# Main layout
-# -----------------------------
+
 left, right = st.columns([1.4, 1])
 
 with left:
@@ -189,9 +180,7 @@ with right:
 
 st.divider()
 
-# -----------------------------
-# Upcoming launches
-# -----------------------------
+
 st.subheader("Upcoming Launches")
 
 if launch_error:
@@ -224,9 +213,7 @@ else:
 
 st.divider()
 
-# -----------------------------
-# Recent failed launches
-# -----------------------------
+
 st.subheader("Recent Failed Launches")
 
 if recent_launch_error:
@@ -258,9 +245,7 @@ else:
 
 st.divider()
 
-# -----------------------------
-# Analyst summary
-# -----------------------------
+
 st.subheader("Analyst Summary")
 
 if launch_error:
