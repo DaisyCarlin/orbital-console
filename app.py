@@ -275,9 +275,9 @@ else:
 
 st.divider()
 
-# =========================================================
+
 # RECENT FAILED LAUNCHES
-# =========================================================
+
 st.subheader("Recent Failed Launches")
 
 if recent_launch_error:
@@ -333,7 +333,7 @@ else:
 st.divider()
 
 
-ANALYST SUMMARY
+# ANALYST SUMMARY
 
 st.subheader("Analyst Summary")
 
